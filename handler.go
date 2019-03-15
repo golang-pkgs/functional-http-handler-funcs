@@ -4,125 +4,74 @@ import (
 	"net/http"
 )
 
-// Cont for handy using Continuation func
-type Cont func(next func(), complete func(), err func())
+// Handler is typed to a nextable  http.HandlerFunc
+type Handler func(res http.ResponseWriter, req *http.Request) Signal
 
-// HTTPHandler is typed to a nextable  http.HandlerFunc
-type HTTPHandler func(res http.ResponseWriter, req *http.Request) Cont
+// HandlerCondition returns a bool result by http response and request
+type HandlerCondition func(res http.ResponseWriter, req *http.Request) bool
 
-// HTTPHandlerCondition returns a bool result by http response and request
-type HTTPHandlerCondition func(res http.ResponseWriter, req *http.Request) bool
+// Signal presents the continuation type of control flow
+type Signal int
 
-type signal int
-
-var (
-	i = signal(0)
-	n = signal(1)
-	c = signal(2)
-	e = signal(3)
-	s = i
+const (
+	// Next present continue
+	Next Signal = iota
+	// Complete present done
+	Complete
+	// Error present panic
+	Error
 )
-
-func reset() {
-	s = i
-}
-
-func next() {
-	if s == i {
-		s = n
-	}
-}
-
-func complete() {
-	if s == i {
-		s = c
-	}
-}
-
-func err() {
-	if s == i {
-		s = e
-	}
-}
-
-func isNext() bool {
-	return s == n
-}
-
-func isComplete() bool {
-	return s == c
-}
-
-func isErr() bool {
-	return s == e
-}
 
 // EmptyHandlerFunc do nothing
 func EmptyHandlerFunc(res http.ResponseWriter, req *http.Request) {}
 
-// Of returns HTTPHandler which executes http.HandlerFunc
-func Of(handler http.HandlerFunc) HTTPHandler {
-	return func(res http.ResponseWriter, req *http.Request) Cont {
-		return func(next func(), complete func(), err func()) {
-			handler(res, req)
-		}
+// NextIt returns Handler which executes http.HandlerFunc and then call next automatically
+func NextIt(hf http.HandlerFunc) Handler {
+	return func(res http.ResponseWriter, req *http.Request) Signal {
+		hf(res, req)
+		return Next
 	}
 }
 
-// Next returns HTTPHandler which executes http.HandlerFunc and then call next automatically
-func Next(handler http.HandlerFunc) HTTPHandler {
-	return func(res http.ResponseWriter, req *http.Request) Cont {
-		return func(next func(), complete func(), err func()) {
-			handler(res, req)
-			next()
-		}
+// CompleteIt returns Handler which executes http.HandlerFunc and then call next automatically
+func CompleteIt(hf http.HandlerFunc) Handler {
+	return func(res http.ResponseWriter, req *http.Request) Signal {
+		hf(res, req)
+		return Complete
 	}
 }
 
-// Complete returns HTTPHandler which executes http.HandlerFunc and then call next automatically
-func Complete(handler http.HandlerFunc) HTTPHandler {
-	return func(res http.ResponseWriter, req *http.Request) Cont {
-		return func(next func(), complete func(), err func()) {
-			handler(res, req)
-			complete()
-		}
+// ErrorIt returns Handler which executes http.HandlerFunc and then call err automatically
+func ErrorIt(hf http.HandlerFunc) Handler {
+	return func(res http.ResponseWriter, req *http.Request) Signal {
+		hf(res, req)
+		return Error
 	}
 }
 
-// Err returns HTTPHandler which executes http.HandlerFunc and then call err automatically
-func Err(handler http.HandlerFunc) HTTPHandler {
-	return func(res http.ResponseWriter, req *http.Request) Cont {
-		return func(next func(), complete func(), err func()) {
-			handler(res, req)
-			err()
+// IfElse call a pair Handler by condition
+func IfElse(condFunc HandlerCondition, handlerFunc1, handlerFunc2 Handler) Handler {
+	return func(res http.ResponseWriter, req *http.Request) Signal {
+		if condFunc(res, req) {
+			return handlerFunc1(res, req)
 		}
+
+		return handlerFunc2(res, req)
 	}
 }
 
-// IfElse call a pair HTTPHandler by condition
-func IfElse(condFunc HTTPHandlerCondition, handlerFunc1, handlerFunc2 HTTPHandler) HTTPHandler {
-	return func(res http.ResponseWriter, req *http.Request) Cont {
-		return func(next func(), complete func(), err func()) {
-			if condFunc(res, req) {
-				handlerFunc1(res, req)(next, complete, err)
-			} else {
-				handlerFunc2(res, req)(next, complete, err)
-			}
-		}
-	}
-}
-
-// Compose compose multiple HTTPHandlers
-func Compose(handlers ...HTTPHandler) http.HandlerFunc {
+// Compose compose multiple Handlers
+func Compose(hs ...Handler) http.HandlerFunc {
 	return func(res http.ResponseWriter, req *http.Request) {
-		for _, h := range handlers {
-			reset()
-			h(res, req)(next, complete, err)
-			if isNext() {
+		for _, h := range hs {
+
+			if sig := h(res, req); sig == Next {
 				continue
+			} else if sig == Complete {
+				break
 			}
 
-			break
+			panic("reject")
 		}
 	}
 }
